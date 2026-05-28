@@ -1,0 +1,75 @@
+name: Publish to GHCR (fork)
+
+# Builds bcanata/domain-locker's Dockerfile and publishes to
+# ghcr.io/bcanata/domain-locker so the live Dokploy deploy can pull a
+# patched build (Trabis .tr WHOIS support) without waiting for upstream.
+#
+# This workflow lives on this fork only; it is intentionally NOT included
+# in the upstream PR (feat/trabis-tr-whois → Lissy93/domain-locker).
+
+on:
+  push:
+    branches:
+      - main
+      - feat/trabis-tr-whois
+  workflow_dispatch:
+
+concurrency:
+  group: ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          REF="${{ github.ref_name }}"
+          SHA="${{ github.sha }}"
+          SHORT="${SHA:0:7}"
+          if [ "$REF" = "main" ]; then
+            echo "tags=ghcr.io/${{ github.repository_owner }}/domain-locker:latest,ghcr.io/${{ github.repository_owner }}/domain-locker:main,ghcr.io/${{ github.repository_owner }}/domain-locker:${SHORT}" >> "$GITHUB_OUTPUT"
+          else
+            # Sanitize branch name for use as a tag
+            CLEAN=$(echo "$REF" | tr '/' '-' | tr -cd 'a-zA-Z0-9._-')
+            echo "tags=ghcr.io/${{ github.repository_owner }}/domain-locker:${CLEAN},ghcr.io/${{ github.repository_owner }}/domain-locker:${CLEAN}-${SHORT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Summary
+        run: |
+          echo "Published:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.tags.outputs.tags }}" | tr ',' '\n' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
